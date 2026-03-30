@@ -1,0 +1,16 @@
+Package: LipidsAnalyst
+Type: Package
+Title: This package is used to annotate and analyze lipidomics data
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Zhiqiang", "Pang",
+      email = "zhiqiang.pang@mcgill.ca",
+      role = c("aut", "cre")
+    )
+  )
+Description: This is a compainion package of MetaboAnalystR
+License: MIT
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
