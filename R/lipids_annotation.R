@@ -5,3 +5,20 @@ ImportLipidsMS2 <- function(){
 }
 
 
+
+
+
+# Main entry function for lipidomics data annotation
+PerformLipidomicsAnnotation <- function(mSet = NULL){
+
+
+
+}
+
+
+{
+
+
+
+
+}
