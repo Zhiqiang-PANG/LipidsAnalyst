@@ -124,6 +124,268 @@
 # }
 #
 
+{
+
+  # Translated from StandardAnnotationProcess.RunAnnotationAsync
+  RunAnnotationAsync <- function(chromPeakFeatures, msdecResults, params, numThreads = 1) {
+
+    if (numThreads <= 1) {
+      RunBySingleThreadAsync(chromPeakFeatures, msdecResults, params)
+    } else {
+      RunByMultiThreadAsync(chromPeakFeatures, msdecResults, params, numThreads)
+    }
+
+  }
+
+  # Translated from StandardAnnotationProcess.RunBySingleThreadAsync
+  RunBySingleThreadAsync <- function(chromPeakFeatures, msdecResults, params) {
+    total <- length(chromPeakFeatures)
+    res <- rep(list(NA), length(mSDecResultCollections))
+
+    for (i in seq_len(total)) {
+      chromPeakFeature <- chromPeakFeatures[[i]]
+      msdecResult <- msdecResults[[i]]
+      res[[i]] <- RunAnnotationCoreAsync(chromPeakFeature, msdecResult, get_field(msdecResults, "CollisionEnergy"), params)
+    }
+  }
+
+  # Translated from StandardAnnotationProcess.RunByMultiThreadAsync
+  RunByMultiThreadAsync <- function(chromPeakFeatures, msdecResults, params, numThreads) {
+    total <- length(chromPeakFeatures)
+    res <- rep(list(NA), length(mSDecResultCollections))
+    # TODO: make this as multi-cores
+    for (i in seq_len(total)) {
+      chromPeakFeature <- chromPeakFeatures[[i]]
+      msdecResult <- msdecResults[[i]]
+      res[[i]] <- RunAnnotationCoreAsync(chromPeakFeature, msdecResult, get_field(msdecResults, "CollisionEnergy"), params)
+    }
+  }
+
+  # Translated from StandardAnnotationProcess.RunAnnotationCoreAsync
+  RunAnnotationCoreAsync <- function(chromPeakFeature, msdecResult, collisionEnergy, params) {
+    spectrum <- get_field(msdecResult, "Spectrum")
+    if (!is.null(spectrum) && length(spectrum) > 0) {
+      chromPeakFeature$MSDecResultIdUsed <- get_field(chromPeakFeature, "MasterPeakID")
+    }
+
+    #factories <- get_field(".queryFactories", list())
+    #for (factory in factories) {
+    # loaded <- invoke_provider_load_ms_spectrum(provider, get_field(chromPeakFeature, "MS1RawSpectrumIdTop"))
+    # ms1Spectrum <- get_field(loaded, "Spectrum")
+    # query <- invoke_factory_create(
+    #   factory,
+    #   chromPeakFeature,
+    #   msdecResult,
+    #   ms1Spectrum,
+    #   get_field(chromPeakFeature, "PeakCharacter"),
+    #   invoke_factory_prepare_parameter(factory)
+    # )
+    #throw_if_cancellation_requested(token)
+
+    # TODO: neet to prepare some information for this steps
+    query <- list(
+      chromPeakFeature,
+      msdecResult,
+      ms1Spectrum,
+      PeakCharacter = get_field(chromPeakFeature, "PeakCharacter"),
+      Parameter = params
+    )
+
+    SetAnnotationResult(query, collisionEnergy)
+    #}
+
+    #throw_if_cancellation_requested(token)
+    #SetRepresentativeProperty(chromPeakFeature)
+    #invisible(NULL)
+  }
+
+  # Translated from StandardAnnotationProcess.SetAnnotationResult
+  SetAnnotationResult <- function(query, collisionEnergy) {
+
+    candidates <- FindCandidates(query, db)
+
+
+
+    # results <- invoke_evaluator_filter_by_threshold(get_field(process, ".evaluator"), candidates)
+    # topResults <- invoke_evaluator_select_top_n(
+    #   get_field(process, ".evaluator"),
+    #   results,
+    #   STANDARD_ANNOTATION_PROCESS_NUMBER_OF_RESULTS
+    # )
+    #
+    # topResults <- lapply(topResults, function(result) {
+    #   result$CollisionEnergy <- collisionEnergy
+    #   result$SpectrumID <- get_field(msdecResult, "RawSpectrumID")
+    #   result
+    # })
+
+    # invoke_match_results_add_results(get_field(chromPeakFeature, "MatchResults"), topResults)
+    # invisible(NULL)
+  }
+
+  # Translated from LcmsMspAnnotator.FindCandidatesCore
+  FindCandidatesCore <- function(query, db) {
+    # Including 3 steps - search + calculate score + order results
+
+    # 1. Search
+    candidates <- search_core(self, property, parameter)
+    if (is.null(candidates) || length(candidates) == 0) {
+      return(list())
+    }
+
+    # 2. Calculate score
+    scored <- lapply(candidates, function(candidate) {
+      calculate_score(self, query, candidate)
+    })
+
+    if (length(scored) <= 1L) return(scored)
+
+    # 3. Order results
+    scores <- vapply(scored, function(result) {
+      as.numeric(get_field(result, "TotalScore", -Inf))
+    }, numeric(1))
+
+    scored[order(scores, decreasing = TRUE)]
+  }
+
+  # Translated from LcmsMspAnnotator.FindCandidates
+  FindCandidates <- function(query, db) {
+    FindCandidatesCore(query, db)
+  }
+
+
+}
+
+
+# FindCandidatesCore and sub functions
+{
+
+  get_field <- function(x, name, default = NULL) {
+    if (is.null(x)) return(default)
+    if (is.environment(x)) {
+      if (exists(name, envir = x, inherits = FALSE)) return(get(name, envir = x))
+      return(default)
+    }
+    if (is.list(x) && !is.null(x[[name]])) return(x[[name]])
+    default
+  }
+
+  set_field <- function(x, name, value) {
+    if (is.environment(x)) {
+      assign(name, value, envir = x)
+      return(x)
+    }
+    x[[name]] <- value
+    x
+  }
+
+  call_method <- function(obj, candidates, ..., default = NULL) {
+    for (nm in candidates) {
+      fn <- get_field(obj, nm, NULL)
+      if (is.function(fn)) {
+        return(fn(...))
+      }
+    }
+    default
+  }
+
+  as_rt_value <- function(chrom_xs) {
+    rt <- get_field(chrom_xs, "RT", NULL)
+    if (is.list(rt) || is.environment(rt)) {
+      return(get_field(rt, "Value", NA_real_))
+    }
+    if (!is.null(rt)) return(rt)
+    NA_real_
+  }
+
+  mass_reference_searcher <- function(db) {
+    structure(
+      list(
+        Search = function(query) {
+          lapply(db, identity)
+        }
+      ),
+      class = "MassReferenceSearcher"
+    )
+  }
+
+  mass_rt_reference_searcher <- function(db) {
+    structure(
+      list(
+        Search = function(query) {
+          lapply(db, identity)
+        }
+      ),
+      class = "MassRtReferenceSearcher"
+    )
+  }
+
+  fix_mass_tolerance <- function(ms1_tolerance, precursor_mz) {
+    fn <- get0("MolecularFormulaUtility_FixMassTolerance", ifnotfound = NULL, inherits = TRUE)
+    if (is.function(fn)) {
+      return(fn(ms1_tolerance, precursor_mz))
+    }
+    ms1_tolerance
+  }
+
+  create_mass_rt_query <- function(precursor_mz, tol, rt, rt_tol) {
+    list(type = "MassRtQuery", precursor_mz = precursor_mz, tolerance = tol, rt = rt, rt_tolerance = rt_tol)
+  }
+
+  create_mass_query <- function(precursor_mz, tol) {
+    list(type = "MassQuery", precursor_mz = precursor_mz, tolerance = tol)
+  }
+
+  searcher <- function(massquery, db) {
+    created <- mass_reference_searcher(db)
+  }
+
+  searcher_with_rt <- function(massquery, db) {
+    created <- mass_rt_reference_searcher(db)
+  }
+
+  calculate_score <- function(self, query, reference) {
+    scorer_obj <- get_field(self, "scorer", NULL)
+    result <- call_method(scorer_obj, c("Score", "score"), query, reference)
+    # this step will call one more calculate score located in another class [MsReferenceScorer]
+
+    parameter <- get_field(query, "Parameter", get_field(self, "Parameter", NULL))
+    use_time <- isTRUE(get_field(parameter, "IsUseTimeForAnnotationScoring", FALSE))
+
+    is_precursor_mz_match <- isTRUE(get_field(result, "IsPrecursorMzMatch", FALSE))
+    is_rt_match <- isTRUE(get_field(result, "IsRtMatch", FALSE))
+    is_spectrum_match <- isTRUE(get_field(result, "IsSpectrumMatch", FALSE))
+
+    is_reference_matched <- is_precursor_mz_match && (!use_time || is_rt_match) && is_spectrum_match
+    result <- set_field(result, "IsReferenceMatched", is_reference_matched)
+
+    is_annotation_suggested <- is_precursor_mz_match && (!use_time || is_rt_match) && !is_reference_matched
+    result <- set_field(result, "IsAnnotationSuggested", is_annotation_suggested)
+
+    result
+  }
+
+  search_core <- function(precursor_mz, ms1_tolerance, rt, rt_tolerance, IsUseTimeForAnnotationFiltering, db) {
+    #precursor_mz <- get_field(property, "PrecursorMz", NA_real_)
+    #ms1_tolerance <- get_field(parameter, "Ms1Tolerance", NA_real_)
+    fixed_tol <- fix_mass_tolerance(ms1_tolerance, precursor_mz)
+
+    if (isTRUE(IsUseTimeForAnnotationFiltering)) {
+      #rt <- as_rt_value(get_field(property, "ChromXs", NULL))
+      #rt_tolerance <- get_field(parameter, "RtTolerance", NA_real_)
+      massrtquery <- create_mass_rt_query(precursor_mz, fixed_tol, rt, rt_tolerance)
+      # return list of candidates
+      return(searcher_with_rt(massrtquery, db))
+    }
+
+    massquery <- create_mass_query(precursor_mz, fixed_tol)
+    # return list of candidates
+    searcher(massquery, db)
+  }
+
+
+}
+
 
 camel_to_snake <- function(x) {
   gsub("_+", "_", tolower(gsub("([a-z0-9])([A-Z])", "\\1_\\2", x, perl = TRUE)))
@@ -1300,29 +1562,6 @@ get_lipid_class_enum <- function(lipidClass) {
     results[order(scores, decreasing = TRUE)]
   }
 
-  # Translated from LcmsMspAnnotator.FindCandidatesCore
-  FindCandidatesCore <- function(query, parameter, annotatorContext) {
-    search_core_fn <- ensure_annotator_search_core(annotatorContext)
-    calculate_score_fn <- ensure_annotator_calculate_score(annotatorContext)
-
-    property <- get_field(query, "Property")
-    candidates <- search_core_fn(property, parameter, annotatorContext)
-    if (is.null(candidates) || length(candidates) == 0) {
-      return(list())
-    }
-
-    results <- lapply(candidates, function(candidate) {
-      calculate_score_fn(query, candidate, annotatorContext)
-    })
-
-    order_results_by_total_score(results)
-  }
-
-  # Translated from LcmsMspAnnotator.FindCandidates
-  FindCandidates <- function(query, annotatorContext) {
-    parameter <- resolve_parameter_or_default(query, annotatorContext)
-    FindCandidatesCore(query, parameter, annotatorContext)
-  }
 
   # Translated from LcmsMspAnnotator.Annotate
   Annotate <- function(query, annotatorContext) {
@@ -1502,14 +1741,6 @@ get_lipid_class_enum <- function(lipidClass) {
     load_fn(index)
   }
 
-  invoke_query_find_candidates <- function(query) {
-    find_fn <- get_field(query, "FindCandidates")
-    if (is.function(find_fn)) {
-      return(find_fn())
-    }
-    AnnotationQueryFindCandidates(query)
-  }
-
   invoke_evaluator_filter_by_threshold <- function(evaluator, candidates) {
     fn <- get_field(evaluator, "FilterByThreshold")
     if (!is.function(fn)) {
@@ -1619,106 +1850,6 @@ get_lipid_class_enum <- function(lipidClass) {
     process
   }
 
-  # Translated from StandardAnnotationProcess.RunAnnotationAsync
-  RunAnnotationAsync <- function(chromPeakFeatures, msdecResults, params, numThreads = 1) {
-
-    if (numThreads <= 1) {
-      RunBySingleThreadAsync(chromPeakFeatures, msdecResults, params)
-    } else {
-      RunByMultiThreadAsync(chromPeakFeatures, msdecResults, params, numThreads)
-    }
-
-  }
-
-  # Translated from StandardAnnotationProcess.RunBySingleThreadAsync
-  RunBySingleThreadAsync <- function(chromPeakFeatures, msdecResults, params) {
-    total <- length(chromPeakFeatures)
-    res <- rep(list(NA), length(mSDecResultCollections))
-
-    for (i in seq_len(total)) {
-      chromPeakFeature <- chromPeakFeatures[[i]]
-      msdecResult <- msdecResults[[i]]
-      res[[i]] <- RunAnnotationCoreAsync(chromPeakFeature, msdecResult, get_field(msdecResults, "CollisionEnergy"), params)
-    }
-  }
-
-  # Translated from StandardAnnotationProcess.RunByMultiThreadAsync
-  RunByMultiThreadAsync <- function(chromPeakFeatures, msdecResults, params, numThreads) {
-    total <- length(chromPeakFeatures)
-    res <- rep(list(NA), length(mSDecResultCollections))
-    # TODO: make this as multi-cores
-    for (i in seq_len(total)) {
-      chromPeakFeature <- chromPeakFeatures[[i]]
-      msdecResult <- msdecResults[[i]]
-      res[[i]] <- RunAnnotationCoreAsync(chromPeakFeature, msdecResult, get_field(msdecResults, "CollisionEnergy"), params)
-    }
-  }
-
-  # Translated from StandardAnnotationProcess.RunAnnotationCoreAsync
-  RunAnnotationCoreAsync <- function(chromPeakFeature, msdecResult, collisionEnergy, params) {
-    spectrum <- get_field(msdecResult, "Spectrum")
-    if (!is.null(spectrum) && length(spectrum) > 0) {
-      chromPeakFeature$MSDecResultIdUsed <- get_field(chromPeakFeature, "MasterPeakID")
-    }
-
-    #factories <- get_field(".queryFactories", list())
-    #for (factory in factories) {
-      # loaded <- invoke_provider_load_ms_spectrum(provider, get_field(chromPeakFeature, "MS1RawSpectrumIdTop"))
-      # ms1Spectrum <- get_field(loaded, "Spectrum")
-      # query <- invoke_factory_create(
-      #   factory,
-      #   chromPeakFeature,
-      #   msdecResult,
-      #   ms1Spectrum,
-      #   get_field(chromPeakFeature, "PeakCharacter"),
-      #   invoke_factory_prepare_parameter(factory)
-      # )
-      #throw_if_cancellation_requested(token)
-
-      # TODO: neet to prepare some information for this steps
-      query <- list(
-        chromPeakFeature,
-        msdecResult,
-        ms1Spectrum,
-        get_field(chromPeakFeature, "PeakCharacter"),
-        params
-      )
-
-      SetAnnotationResult(query, collisionEnergy)
-    #}
-
-    #throw_if_cancellation_requested(token)
-    #SetRepresentativeProperty(chromPeakFeature)
-    #invisible(NULL)
-  }
-
-  # Translated from StandardAnnotationProcess.SetAnnotationResult
-  SetAnnotationResult <- function(query, collisionEnergy) {
-
-
-    #candidates <- invoke_query_find_candidates(query)
-
-    candidates <- AnnotationQueryFindCandidates(query)
-
-
-
-    # results <- invoke_evaluator_filter_by_threshold(get_field(process, ".evaluator"), candidates)
-    # topResults <- invoke_evaluator_select_top_n(
-    #   get_field(process, ".evaluator"),
-    #   results,
-    #   STANDARD_ANNOTATION_PROCESS_NUMBER_OF_RESULTS
-    # )
-    #
-    # topResults <- lapply(topResults, function(result) {
-    #   result$CollisionEnergy <- collisionEnergy
-    #   result$SpectrumID <- get_field(msdecResult, "RawSpectrumID")
-    #   result
-    # })
-
-    # invoke_match_results_add_results(get_field(chromPeakFeature, "MatchResults"), topResults)
-    # invisible(NULL)
-  }
-
   # Translated from StandardAnnotationProcess.SetRepresentativeProperty
   SetRepresentativeProperty <- function(process, chromPeakFeature) {
     representative <- get_field(get_field(chromPeakFeature, "MatchResults"), "Representative")
@@ -1738,311 +1869,6 @@ get_lipid_class_enum <- function(lipidClass) {
   }
 
 
-
-}
-
-{
-
-  get_field <- function(x, name, default = NULL) {
-    if (is.null(x)) return(default)
-    if (is.environment(x)) {
-      if (exists(name, envir = x, inherits = FALSE)) return(get(name, envir = x))
-      return(default)
-    }
-    if (is.list(x) && !is.null(x[[name]])) return(x[[name]])
-    default
-  }
-
-  set_field <- function(x, name, value) {
-    if (is.environment(x)) {
-      assign(name, value, envir = x)
-      return(x)
-    }
-    x[[name]] <- value
-    x
-  }
-
-  call_method <- function(obj, candidates, ..., default = NULL) {
-    for (nm in candidates) {
-      fn <- get_field(obj, nm, NULL)
-      if (is.function(fn)) {
-        return(fn(...))
-      }
-    }
-    default
-  }
-
-  as_rt_value <- function(chrom_xs) {
-    rt <- get_field(chrom_xs, "RT", NULL)
-    if (is.list(rt) || is.environment(rt)) {
-      return(get_field(rt, "Value", NA_real_))
-    }
-    if (!is.null(rt)) return(rt)
-    NA_real_
-  }
-
-  mass_reference_searcher <- function(db) {
-    structure(
-      list(
-        Search = function(query) {
-          lapply(db, identity)
-        }
-      ),
-      class = "MassReferenceSearcher"
-    )
-  }
-
-  mass_rt_reference_searcher <- function(db) {
-    structure(
-      list(
-        Search = function(query) {
-          lapply(db, identity)
-        }
-      ),
-      class = "MassRtReferenceSearcher"
-    )
-  }
-
-  fix_mass_tolerance <- function(ms1_tolerance, precursor_mz) {
-    fn <- get0("MolecularFormulaUtility_FixMassTolerance", ifnotfound = NULL, inherits = TRUE)
-    if (is.function(fn)) {
-      return(fn(ms1_tolerance, precursor_mz))
-    }
-    ms1_tolerance
-  }
-
-  create_mass_rt_query <- function(precursor_mz, tol, rt, rt_tol) {
-    list(type = "MassRtQuery", precursor_mz = precursor_mz, tolerance = tol, rt = rt, rt_tolerance = rt_tol)
-  }
-
-  create_mass_query <- function(precursor_mz, tol) {
-    list(type = "MassQuery", precursor_mz = precursor_mz, tolerance = tol)
-  }
-
-  searcher <- function(self) {
-    existing <- get_field(self, "searcher", NULL)
-    if (!is.null(existing)) return(existing)
-    db <- get_field(self, "db", list())
-    created <- mass_reference_searcher(db)
-    self <- set_field(self, "searcher", created)
-    get_field(self, "searcher", created)
-  }
-
-  searcher_with_rt <- function(self) {
-    existing <- get_field(self, "searcherWithRt", NULL)
-    if (!is.null(existing)) return(existing)
-    db <- get_field(self, "db", list())
-    created <- mass_rt_reference_searcher(db)
-    self <- set_field(self, "searcherWithRt", created)
-    get_field(self, "searcherWithRt", created)
-  }
-
-  calculate_score <- function(self, query, reference) {
-    scorer_obj <- get_field(self, "scorer", NULL)
-    result <- call_method(scorer_obj, c("Score", "score"), query, reference)
-    # this step will call one more calculate score located in another class [MsReferenceScorer]
-
-    parameter <- get_field(query, "Parameter", get_field(self, "Parameter", NULL))
-    use_time <- isTRUE(get_field(parameter, "IsUseTimeForAnnotationScoring", FALSE))
-
-    is_precursor_mz_match <- isTRUE(get_field(result, "IsPrecursorMzMatch", FALSE))
-    is_rt_match <- isTRUE(get_field(result, "IsRtMatch", FALSE))
-    is_spectrum_match <- isTRUE(get_field(result, "IsSpectrumMatch", FALSE))
-
-    is_reference_matched <- is_precursor_mz_match && (!use_time || is_rt_match) && is_spectrum_match
-    result <- set_field(result, "IsReferenceMatched", is_reference_matched)
-
-    is_annotation_suggested <- is_precursor_mz_match && (!use_time || is_rt_match) && !is_reference_matched
-    result <- set_field(result, "IsAnnotationSuggested", is_annotation_suggested)
-
-    result
-  }
-
-  search_core <- function(self, property, parameter) {
-    precursor_mz <- get_field(property, "PrecursorMz", NA_real_)
-    ms1_tolerance <- get_field(parameter, "Ms1Tolerance", NA_real_)
-    fixed_tol <- fix_mass_tolerance(ms1_tolerance, precursor_mz)
-
-    if (isTRUE(get_field(parameter, "IsUseTimeForAnnotationFiltering", FALSE))) {
-      rt <- as_rt_value(get_field(property, "ChromXs", NULL))
-      rt_tolerance <- get_field(parameter, "RtTolerance", NA_real_)
-      query <- create_mass_rt_query(precursor_mz, fixed_tol, rt, rt_tolerance)
-      return(call_method(searcher_with_rt(self), c("Search", "search"), query, default = list()))
-    }
-
-    query <- create_mass_query(precursor_mz, fixed_tol)
-    call_method(searcher(self), c("Search", "search"), query, default = list())
-  }
-
-  find_candidates_core <- function(self, query, parameter) {
-    property <- get_field(query, "Property", NULL)
-    candidates <- search_core(self, property, parameter)
-
-    scored <- lapply(candidates, function(candidate) {
-      calculate_score(self, query, candidate)
-    })
-
-    if (length(scored) <= 1L) return(scored)
-
-    scores <- vapply(scored, function(result) {
-      as.numeric(get_field(result, "TotalScore", -Inf))
-    }, numeric(1))
-
-    scored[order(scores, decreasing = TRUE)]
-  }
-
-
-
-}
-
-{
-  get_field <- function(x, name, default = NULL) {
-    if (is.null(x)) return(default)
-    if (is.environment(x)) {
-      if (exists(name, envir = x, inherits = FALSE)) return(get(name, envir = x))
-      return(default)
-    }
-    if (is.list(x) && !is.null(x[[name]])) return(x[[name]])
-    default
-  }
-
-  set_field <- function(x, name, value) {
-    if (is.environment(x)) {
-      assign(name, value, envir = x)
-      return(x)
-    }
-    x[[name]] <- value
-    x
-  }
-
-  call_method <- function(obj, candidates, ..., default = NULL) {
-    for (nm in candidates) {
-      fn <- get_field(obj, nm, NULL)
-      if (is.function(fn)) {
-        return(fn(...))
-      }
-    }
-    default
-  }
-
-  as_rt_value <- function(chrom_xs) {
-    rt <- get_field(chrom_xs, "RT", NULL)
-    if (is.list(rt) || is.environment(rt)) {
-      return(get_field(rt, "Value", NA_real_))
-    }
-    if (!is.null(rt)) return(rt)
-    NA_real_
-  }
-
-  mass_reference_searcher <- function(db) {
-    structure(
-      list(
-        Search = function(query) {
-          lapply(db, identity)
-        }
-      ),
-      class = "MassReferenceSearcher"
-    )
-  }
-
-  mass_rt_reference_searcher <- function(db) {
-    structure(
-      list(
-        Search = function(query) {
-          lapply(db, identity)
-        }
-      ),
-      class = "MassRtReferenceSearcher"
-    )
-  }
-
-  fix_mass_tolerance <- function(ms1_tolerance, precursor_mz) {
-    fn <- get0("MolecularFormulaUtility_FixMassTolerance", ifnotfound = NULL, inherits = TRUE)
-    if (is.function(fn)) {
-      return(fn(ms1_tolerance, precursor_mz))
-    }
-    ms1_tolerance
-  }
-
-  create_mass_rt_query <- function(precursor_mz, tol, rt, rt_tol) {
-    list(type = "MassRtQuery", precursor_mz = precursor_mz, tolerance = tol, rt = rt, rt_tolerance = rt_tol)
-  }
-
-  create_mass_query <- function(precursor_mz, tol) {
-    list(type = "MassQuery", precursor_mz = precursor_mz, tolerance = tol)
-  }
-
-  searcher <- function(self) {
-    existing <- get_field(self, "searcher", NULL)
-    if (!is.null(existing)) return(existing)
-    db <- get_field(self, "db", list())
-    created <- mass_reference_searcher(db)
-    self <- set_field(self, "searcher", created)
-    get_field(self, "searcher", created)
-  }
-
-  searcher_with_rt <- function(self) {
-    existing <- get_field(self, "searcherWithRt", NULL)
-    if (!is.null(existing)) return(existing)
-    db <- get_field(self, "db", list())
-    created <- mass_rt_reference_searcher(db)
-    self <- set_field(self, "searcherWithRt", created)
-    get_field(self, "searcherWithRt", created)
-  }
-
-  calculate_score <- function(self, query, reference) {
-    scorer_obj <- get_field(self, "scorer", NULL)
-    result <- call_method(scorer_obj, c("Score", "score"), query, reference)
-    # this step will call one more calculate score located in another class [MsReferenceScorer]
-
-    parameter <- get_field(query, "Parameter", get_field(self, "Parameter", NULL))
-    use_time <- isTRUE(get_field(parameter, "IsUseTimeForAnnotationScoring", FALSE))
-
-    is_precursor_mz_match <- isTRUE(get_field(result, "IsPrecursorMzMatch", FALSE))
-    is_rt_match <- isTRUE(get_field(result, "IsRtMatch", FALSE))
-    is_spectrum_match <- isTRUE(get_field(result, "IsSpectrumMatch", FALSE))
-
-    is_reference_matched <- is_precursor_mz_match && (!use_time || is_rt_match) && is_spectrum_match
-    result <- set_field(result, "IsReferenceMatched", is_reference_matched)
-
-    is_annotation_suggested <- is_precursor_mz_match && (!use_time || is_rt_match) && !is_reference_matched
-    result <- set_field(result, "IsAnnotationSuggested", is_annotation_suggested)
-
-    result
-  }
-
-  search_core <- function(self, property, parameter) {
-    precursor_mz <- get_field(property, "PrecursorMz", NA_real_)
-    ms1_tolerance <- get_field(parameter, "Ms1Tolerance", NA_real_)
-    fixed_tol <- fix_mass_tolerance(ms1_tolerance, precursor_mz)
-
-    if (isTRUE(get_field(parameter, "IsUseTimeForAnnotationFiltering", FALSE))) {
-      rt <- as_rt_value(get_field(property, "ChromXs", NULL))
-      rt_tolerance <- get_field(parameter, "RtTolerance", NA_real_)
-      query <- create_mass_rt_query(precursor_mz, fixed_tol, rt, rt_tolerance)
-      return(call_method(searcher_with_rt(self), c("Search", "search"), query, default = list()))
-    }
-
-    query <- create_mass_query(precursor_mz, fixed_tol)
-    call_method(searcher(self), c("Search", "search"), query, default = list())
-  }
-
-  find_candidates_core <- function(self, query, parameter) {
-    property <- get_field(query, "Property", NULL)
-    candidates <- search_core(self, property, parameter)
-
-    scored <- lapply(candidates, function(candidate) {
-      calculate_score(self, query, candidate)
-    })
-
-    if (length(scored) <= 1L) return(scored)
-
-    scores <- vapply(scored, function(result) {
-      as.numeric(get_field(result, "TotalScore", -Inf))
-    }, numeric(1))
-
-    scored[order(scores, decreasing = TRUE)]
-  }
 
 }
 
